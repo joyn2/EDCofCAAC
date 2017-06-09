@@ -6,19 +6,22 @@
 * 日期:  17/4/29
 * 描述:  和电机有关的控制函数都在这里，还有pid算法控制也在其中
 * 主要函数及其功能 : // 主要函数及其功能
-  1. -------
+* 1. -------
 * 历史修改记录: // 历史修改记录
 * <作者> <时间> <版本 > <描述>
 * 周晨阳 17/4/29 1.0 创建此描述
 * 周晨阳 17/5/4  1.1 积分方面加入了积分分离法，pid效果明显提升
 * 周晨阳 17/5/3  1.2 改进了pwm发生函数和开环控制角度的函数，加了死区控制
 * 周晨阳 17/5/7  1.3 将角度设置由原来的整数升级成浮点数，提高了精度
+* 周晨阳 17/6/1  1.4 增加了电机停止函数，开启函数，以及电机状态查询函数，同时修改了稳定角度函数的使用方法
 ***********************************************************/
 #include "MOTOR.h"
 #include "../ANGLE/ANGLE.h"
 #include <math.h>
+
 #define  INTEGRAL_SEPARATE //使用积分分离法
 static float Ki_temp,Kp_temp,Kd_temp; //保存pid三个参数的静态变量
+static bit MotorState=OFF;//电机状态标志位，OFF 为关闭，ON 为开启
 //pid算法的静态结构体
 
 static struct
@@ -31,14 +34,23 @@ static struct
     float integral;//积分值,位置式pid算法
     float output;  //实际输出因子
 } pid;
+bit getMotorState()
+{
+	 return MotorState;
+	
+}
 void stopMotor(void)
 {
-   CLOSE_PWM();
+  setMotorSpeed(LEFT_MOTOR,0.01f);
+  setMotorSpeed(RIGHT_MOTOR,0.01f);
+  MotorState=OFF;
+
 
 }
 void startMotor(void)
 {
    OPEN_PWM();
+	 MotorState=ON;
 }
 /*************************************************
 * 函数名称: void setMotorSpeed(bit motor,float speed)
@@ -51,23 +63,25 @@ void startMotor(void)
 void setMotorSpeed(bit motor,float speed)
 {
 	
-		if(speed>0.99f)
+		if(speed>0.95f)
 			{
-		   speed=0.99f;
+		   speed=0.95f;
 	    }
-		if(!speed)
+		if(speed<0.05f)
 		{
 			
-			speed=0.01f;
+			speed=0.05f;
 		}
 		
 		if(motor)
 		{
-			PWM_duty(PWM_2,speed*0.65f);//根据不同电机乘于不同的增益
+		//	PWM_duty(PWM_2,speed*0.65f);//根据不同电机乘于不同的增益
+			PWM_duty(PWM_2,speed);//根据不同电机乘于不同的增益
 		}
 		else
 		{
-			PWM_duty(PWM_4,speed*0.63f);
+		//	PWM_duty(PWM_4,speed*0.63f);
+			PWM_duty(PWM_4,speed);
 		}
 }
 
@@ -83,24 +97,23 @@ void setMotorSpeed(bit motor,float speed)
 *************************************************/
 static bit setBoardWithAngle(float angle)
 {
-	static float ANGLE;
-	   ANGLE=angle;
-    if(ANGLE>=179.9f)
+	
+    if(angle>=179.9f)
     {
-        ANGLE=179.9f;
+        angle=179.9f;
 #ifdef MOTOR_DEBUG
         PrintString1("angle is over maximum adjusting\n");
 #endif
     }
-    if(ANGLE<=0.1f)
+    if(angle<=0.1f)
     {
-        ANGLE=0.1f;
+        angle=0.1f;
 #ifdef MOTOR_DEBUG
         PrintString1("angle is over miximum adjusting\n");
 #endif
     }
-    setMotorSpeed(LEFT_MOTOR,ANGLE/180.0f);
-    setMotorSpeed(RIGHT_MOTOR,1.0f-ANGLE/180.0f);
+    setMotorSpeed(LEFT_MOTOR,angle/180.0f);
+    setMotorSpeed(RIGHT_MOTOR,1.0f-angle/180.0f);
     return 1;
 }
 
@@ -108,39 +121,44 @@ static bit setBoardWithAngle(float angle)
 * 函数名称: bit setBoardWithAngleAndPID(unsigned char angle)
 * 描述: 带pid算法的风摆角度调整函数
 * 输入: 无
-* 返回值: 执行一次角度调整后，返回1
-* 其他说明: 在执行调整时会向串口发送正在调整的提示。
+* 返回值: 执行一次角度调整后，执行成功返回1
+*             其他说明: 
+* 调用此函数会进入循环，只有当误差第一次小于允许误差之后才会退出循环，
+* 但是无法保证退出循环后风板是否能一直稳定。
+* 如果想让风板一直保持稳定，必须不停的调用此函数。 
+*               注意：
+* 请使用pid设置函数setPID_data（）来设置角度，之后在调用此函数。
 ***函数更新****
   作者  |  时间  |  说明
 *周晨阳	   5/16		请使用pid设置函数setPID_data（）
 									设置需要稳定的角度，不要向此函数传值*
+									 无效
 *************************************************/
-bit setBoardWithAngleAndPID(float angle)
+bit setBoardWithAngleAndPID(void)
 {    
-	static float ANGLE;
-	ANGLE=angle;
+	
 
-	if(ANGLE>145.0f)
+	if(pid.setAngle >145.0f)
     {
-        ANGLE=145.0f;
+        pid.setAngle =145.0f;
 #ifdef MOTOR_DEBUG
         PrintString1("angle is over maximum adjusting\n");
 #endif
     }
-    if(ANGLE<35.0f)
+    if(pid.setAngle <35.0f)
     {
-        ANGLE=35.0f;
+        pid.setAngle =35.0f;
 #ifdef MOTOR_DEBUG
         PrintString1("angle is over miximum adjusting\n");
 #endif
     }
 		
 		
-  //  pid.setAngle      =           ANGLE;
-    pid.actualAngle   =           getAngle(PRESENT_ANGLE);
+//  pid.setAngle      =           ANGLE; //不使用此函数去设置角度，此函数只稳定不设定。
+    pid.actualAngle   =           getAngle(LAST_ANGLE);
     pid.err           =           pid.setAngle-pid.actualAngle;
-#ifdef  INTEGRAL_SEPARATE
-    if(abs(pid.err)<10.0f)//积分分离法，防止误差过大时积分累积过大造成震荡，同时减小比例和微分
+#ifdef  INTEGRAL_SEPARATE //是否使用积分分离法
+    if(abs(pid.err)<15.0f)//积分分离法，防止误差过大时积分累积过大造成震荡，同时减小比例和微分
     {   pid.Ki        =        Ki_temp;
         pid.integral  +=       pid.err;
         pid.Kp        =        Kp_temp-0.7f;
@@ -156,16 +174,18 @@ bit setBoardWithAngleAndPID(float angle)
 		 pid.integral  +=       pid.err;
 #endif
     pid.output        =    pid.Kp*pid.err+pid.Ki*pid.integral+pid.Kd*(pid.err-pid.err_last);
-    setBoardWithAngle(pid.output+ANGLE);
+    setBoardWithAngle(pid.output+pid.setAngle);
     pid.err_last=pid.err;
-    return 1;
+	  
+	
+       return 1;
+
 }
 
 /*************************************************
-* 函数名称:double getPID_data(u8 DATA)
+* 函数名称:float getPID_data(u8 DATA)
 * 描述: 读取pid参数      
 * 输入: 见宏定义      
-* 输出: 
 * 返回值: 相应pid参数
 * 其他说明: 若没有设置pid参数就直接读取，则结果未知。
 *************************************************/
@@ -249,7 +269,7 @@ void setPID_data(u8 DATA,float value)
 void PID_config(float kp,float ki,float kd)//pid算法初始化函数，参数是三个，PID
 {
     pid.setAngle=70;//若最终没有设置角度则默认70度
-    pid.actualAngle=0;
+    pid.actualAngle=30;
     pid.err=0;
     pid.err_last=0;
     pid.output=0;
